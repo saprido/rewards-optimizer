@@ -47,26 +47,30 @@ def connect():
 #     ERROR = "ERROR"
 
 
-cards_dict = []
+cards_list = []
 
 
-# class CreditCard(object):
-#     card_name = ""
-#     amount_saved = 0.0
-#     rewardType = RewardType.CASHBACK
-#
-#     # The class "constructor" - It's actually an initializer
-#     def __init__(self, name, amount, reward_type):
-#         self.card_name = name
-#         self.amount_saved = amount
-#         self.rewardType = reward_type
-#
-#
-# def make_CreditCard(name, amount, reward_type):
-#     card = CreditCard(name, amount, reward_type)
-#     return card
+class CreditCard(object):
+    card_name = ""
+    amount_saved = 0.0
+    rewardType = ""
 
-#
+    # The class "constructor" - It's actually an initializer
+    def __init__(self, name, amount, reward_type):
+        self.card_name = name
+        self.amount_saved = amount
+        self.rewardType = reward_type
+
+
+def make_CreditCard(name, amount, reward_type):
+    card_dict = {
+        "name" : name,
+        "amount_saved" : amount,
+        "reward_type" : reward_type
+    }
+    return card_dict
+
+
 # def get_RewardType(rewardString):
 #     if rewardString == "CASHBACK":
 #         return RewardType.CASHBACK
@@ -95,17 +99,16 @@ def populate_dict():
             # if (
             #         pd.read_sql("SELECT reward_type FROM credit_cards WHERE card_id='{}'".format(card_name),
             #                     conn).values[0]):
-            reward_type = \
-                    pd.read_sql("SELECT reward_type FROM credit_cards WHERE card_id='{}'".format(card_name),
-                                conn).values
+            reward_type = pd.read_sql("SELECT reward_type FROM credit_cards WHERE card_id='{}'".format(card_name),
+                                      conn).values
             # else:
             #     reward_type = "ERROR"
-
+            print("SELECT reward_type FROM credit_cards WHERE card_id='{}'".format(card_name))
             print(reward_type)
 
-            data = {'card_name': card_name, 'amount_saved': amount_saved[0][0], 'reward_type': reward_type[0]}
-            json_data = json.dumps(data)
-            cards_dict.append(json_data)
+            # data = {"card_name": card_name.replace, "amount_saved": amount_saved[0][0], "reward_type": reward_type[0][0]}
+            # json_data = json.dumps(data)
+            cards_list.append(make_CreditCard(card_name, amount_saved[0][0], reward_type[0][0]))
 
     except (Exception, psycopg2.DatabaseError) as error:
         print("ERROR: populate_dict: {}".format(error))
@@ -237,16 +240,16 @@ print(__name__)
 
 @app.route('/cards')
 def get_books():
-    return jsonify({'cards': cards_dict})
+    return jsonify({'cards': cards_list})
 
 
 @app.route('/cards/<string:card_id>')
 def get_book_by_isbn(card_id):
     return_value = {}  # empty to return just in case
-    for card in cards_dict:
-        if card["card_name"] == card_id:
+    for card in cards_list:
+        if card["name"] == card_id:
             return_value = {
-                'card_name': card["card_name"],
+                'card_name': card["name"],
                 'amount_saved': card["amount_saved"],
                 'reward_type': card["reward_type"]
             }
