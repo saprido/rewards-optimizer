@@ -1,11 +1,12 @@
 # !/usr/bin/python
-import json
 
 import psycopg2
 import pandas as pd
 from flask import Flask, jsonify, request
+from flask_cors import CORS
 from config import config
-from enum import Enum
+from flasgger import Swagger
+
 
 
 def connect():
@@ -40,13 +41,6 @@ def connect():
             print('Database connection closed.')
 
 
-# class RewardType(Enum):
-#     POINTS = "POINTS"
-#     CASHBACK = "CASHBACK"
-#     MILES = "MILES"
-#     ERROR = "ERROR"
-
-
 cards_list = []
 
 
@@ -64,22 +58,11 @@ class CreditCard(object):
 
 def make_CreditCard(name, amount, reward_type):
     card_dict = {
-        "name" : name,
-        "amount_saved" : amount,
-        "reward_type" : reward_type
+        "name": name,
+        "amount_saved": amount,
+        "reward_type": reward_type
     }
     return card_dict
-
-
-# def get_RewardType(rewardString):
-#     if rewardString == "CASHBACK":
-#         return RewardType.CASHBACK
-#     elif rewardString == "POINTS":
-#         return RewardType.POINTS
-#     elif rewardString == "MILES":
-#         return RewardType.MILES
-#     else:
-#         return RewardType.ERROR
 
 
 def populate_dict():
@@ -87,27 +70,18 @@ def populate_dict():
         params = config()
         conn = psycopg2.connect(**params)
 
-        card_name = ""
-        amount_saved = 0.0
-        reward_type = ""
-
         cards = pd.read_sql("SELECT DISTINCT card_id FROM rate_rules", conn).values
 
         for card in cards:
             card_name = '{}'.format(card[0])  # SAVOR_ONE
             amount_saved = get_total_saved_by_card("{}".format(card_name))
-            # if (
-            #         pd.read_sql("SELECT reward_type FROM credit_cards WHERE card_id='{}'".format(card_name),
-            #                     conn).values[0]):
+
             reward_type = pd.read_sql("SELECT reward_type FROM credit_cards WHERE card_id='{}'".format(card_name),
                                       conn).values
-            # else:
-            #     reward_type = "ERROR"
+
             print("SELECT reward_type FROM credit_cards WHERE card_id='{}'".format(card_name))
             print(reward_type)
 
-            # data = {"card_name": card_name.replace, "amount_saved": amount_saved[0][0], "reward_type": reward_type[0][0]}
-            # json_data = json.dumps(data)
             cards_list.append(make_CreditCard(card_name, amount_saved[0][0], reward_type[0][0]))
 
     except (Exception, psycopg2.DatabaseError) as error:
@@ -131,6 +105,37 @@ def get_total_spent_by_card(card_id):
         print("ERROR: get_total_spent_by_card: {}".format(error))
 
 
+def make_category_info(category_name, amount_saved):
+    category_info = {
+        "category": category_name,
+        "amount_saved": amount_saved
+    }
+
+    return category_info
+
+
+def get_categories_saved(card_id):
+    categories_list = {
+        "name": card_id,
+        "category_saved list": []
+    }
+
+    try:
+        params = config()
+        conn = psycopg2.connect(**params)
+
+        categories = pd.read_sql(
+            "SELECT category FROM rate_rules WHERE card_id='{}'".format(card_id), conn).values
+
+        for category in categories:
+            category_item = make_category_info(category[0], get_total_saved_by_category(category[0], card_id)[0][0])
+            categories_list["category_saved list"].append(category_item)
+
+        return categories_list
+    except (Exception, psycopg2.DatabaseError) as error:
+        print("ERROR: get_total_saved_by_card: {}".format(error))
+
+
 def get_total_saved_by_card(card_id):
     total = 0.0
     try:
@@ -139,8 +144,6 @@ def get_total_saved_by_card(card_id):
 
         categories = pd.read_sql(
             "SELECT category FROM rate_rules WHERE card_id='{}'".format(card_id), conn).values
-
-        # print(categories)
 
         for category in categories:
             total = total + get_total_saved_by_category(category[0], card_id)
@@ -151,7 +154,6 @@ def get_total_saved_by_card(card_id):
 
 def get_total_saved_by_category(category, card_id):
     try:
-        # print("total cat param: {}".format(category))
         params = config()
         conn = psycopg2.connect(**params)
 
@@ -181,7 +183,6 @@ def get_total_saved_by_category(category, card_id):
 # return total amount spent by category from transactions db
 def get_total_spent_by_category(category, card_id):
     try:
-        # print("total cat param: {}".format(category))
         params = config()
         conn = psycopg2.connect(**params)
 
@@ -223,20 +224,19 @@ def get_total_spent_not_applied(card_id):
 
 
 if __name__ == '__main__':
-    # print("total by card: {}".format(get_total_spent_by_card("\'SAVOR\'")))
-    # print("total by category: {}".format(get_total_spent_by_category("\'DINING\'", "\'FREEDOM\'")))
-    # print("total not applied: {}".format(get_total_spent_not_applied("\'SAVOR\'")))
-    # print("total saved by category: {}".format(get_total_saved_by_category("\'DINING\'", "\'SAVOR\'")))
-    # print("total saved by card: {}".format(get_total_saved_by_card("\'SAVOR_ONE\'")))
-    # print("total saved by card: {}".format(get_total_saved_by_card("\'FREEDOM\'")))
     populate_dict()
+    print(get_categories_saved('SAVOR'))
 
 app = Flask(__name__)
+CORS(app)
+Swagger(app)
 print(__name__)
 
 
-# GET /books
-# @app.route('/books', methods='POST')
+@app.route('/card', methods=['POST'])
+def add_new_card():
+    return jsonify(request.get_json())
+
 
 @app.route('/cards')
 def get_books():
@@ -251,12 +251,31 @@ def get_book_by_isbn(card_id):
             return_value = {
                 'card_name': card["name"],
                 'amount_saved': card["amount_saved"],
-                'reward_type': card["reward_type"]
+                'reward_type': card["reward_type"],
+                'categories': get_categories_saved(card_id)
             }
     return jsonify(return_value)
 
 
+@app.route('/optimized/<string:reward_type>')
+def get_optimized_for_type(reward_type):
+    result = 0
+    result_amount = 0
+    for card in cards_list:
+        if card["reward_type"] == reward_type:
+            if card["amount_saved"] > result_amount:
+                print("{}".format(card))
+                print("{} {} {}".format(card["reward_type"], card["amount_saved"], card["name"]))
+                result_amount = card["amount_saved"]
+                result = card
+    return jsonify(result)
+
+
+
 # POST new credit card
 # POST new credit card rule
+# GET total spent on category
+# GET total saved by card : would list categories
+
 
 app.run(port=5000)
