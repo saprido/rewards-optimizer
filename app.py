@@ -14,9 +14,9 @@ from werkzeug.utils import secure_filename
 import pandas as pd
 import csv
 
-UPLOAD_FOLDER = '/Users/sanjana/Documents'
+UPLOAD_FOLDER = ''
 
-db_string = "postgres://adminS:SherLocked221B@cc-reward-optimizer.cefuuvy2mell.us-east-1.rds.amazonaws.com/cc-rewards"
+db_string = "postgres://user:pass@cc-reward-optimizer.cefuuvy2mell.us-east-1.rds.amazonaws.com/cc-rewards"
 
 db = create_engine(db_string)
 
