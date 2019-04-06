@@ -1,11 +1,35 @@
 # !/usr/bin/python
-import json
 
 import psycopg2
-import pandas as pd
-from flask import Flask, jsonify, request
+import os
+from sqlalchemy import create_engine
+from sqlalchemy import Table, Column, String, MetaData, func
+from flask_cors import CORS
 from config import config
-from enum import Enum
+from flasgger import Swagger
+from sqlalchemy.orm import sessionmaker
+from flask_uploads import UploadSet, DATA, configure_uploads
+from flask import Flask, flash, request, jsonify, redirect, url_for
+from werkzeug.utils import secure_filename
+import pandas as pd
+import csv
+
+UPLOAD_FOLDER = ''
+
+db_string = "postgres://user:pass@cc-reward-optimizer.cefuuvy2mell.us-east-1.rds.amazonaws.com/cc-rewards"
+
+db = create_engine(db_string)
+
+meta = MetaData()
+meta.reflect(db)
+
+Session = sessionmaker(db)
+session = Session()
+
+credit_cards = Table('credit_cards', meta, autoload=True, autoload_with=db)
+rate_rules = Table('rate_rules', meta, autoload=True, autoload_with=db)
+transactions = Table('transactions', meta, autoload=True, autoload_with=db)
+user = Table('transactions.user', meta, autoload=True, autoload_with=db)
 
 
 def connect():
@@ -40,14 +64,19 @@ def connect():
             print('Database connection closed.')
 
 
-# class RewardType(Enum):
-#     POINTS = "POINTS"
-#     CASHBACK = "CASHBACK"
-#     MILES = "MILES"
-#     ERROR = "ERROR"
-
-
 cards_list = []
+
+spending_categories_list = []
+
+
+class Spending(object):
+    category = ""
+    amount_spent = 0.0
+
+    # The class "constructor" - It's actually an initializer
+    def __init__(self, name, amount):
+        self.category = name
+        self.amount_spent = amount
 
 
 class CreditCard(object):
@@ -62,184 +91,201 @@ class CreditCard(object):
         self.rewardType = reward_type
 
 
-def make_CreditCard(name, amount, reward_type):
+def make_credit_card(name, amount, reward_type):
     card_dict = {
-        "name" : name,
-        "amount_saved" : amount,
-        "reward_type" : reward_type
+        "name": name,
+        "amount_saved": amount,
+        "reward_type": reward_type
     }
     return card_dict
 
 
-# def get_RewardType(rewardString):
-#     if rewardString == "CASHBACK":
-#         return RewardType.CASHBACK
-#     elif rewardString == "POINTS":
-#         return RewardType.POINTS
-#     elif rewardString == "MILES":
-#         return RewardType.MILES
-#     else:
-#         return RewardType.ERROR
+def make_spending_entry(name, amount):
+    spend_entry = {
+        "category": name,
+        "amount_spent": amount,
+    }
+    return spend_entry;
 
 
 def populate_dict():
-    try:
-        params = config()
-        conn = psycopg2.connect(**params)
-
-        card_name = ""
-        amount_saved = 0.0
-        reward_type = ""
-
-        cards = pd.read_sql("SELECT DISTINCT card_id FROM rate_rules", conn).values
-
-        for card in cards:
-            card_name = '{}'.format(card[0])  # SAVOR_ONE
-            amount_saved = get_total_saved_by_card("{}".format(card_name))
-            # if (
-            #         pd.read_sql("SELECT reward_type FROM credit_cards WHERE card_id='{}'".format(card_name),
-            #                     conn).values[0]):
-            reward_type = pd.read_sql("SELECT reward_type FROM credit_cards WHERE card_id='{}'".format(card_name),
-                                      conn).values
-            # else:
-            #     reward_type = "ERROR"
-            print("SELECT reward_type FROM credit_cards WHERE card_id='{}'".format(card_name))
-            print(reward_type)
-
-            # data = {"card_name": card_name.replace, "amount_saved": amount_saved[0][0], "reward_type": reward_type[0][0]}
-            # json_data = json.dumps(data)
-            cards_list.append(make_CreditCard(card_name, amount_saved[0][0], reward_type[0][0]))
-
-    except (Exception, psycopg2.DatabaseError) as error:
-        print("ERROR: populate_dict: {}".format(error))
+    for card in session.query(rate_rules.columns.card_id).distinct():
+        print('{} : {}'.format(card.card_id, get_total_spent_not_applied(card.card_id)))
+        amount_saved = round(float(get_total_saved_by_card(card.card_id)), 2)
+        reward_type = session.query(credit_cards.columns.reward_type).filter(
+            credit_cards.columns.card_id == card.card_id).first().reward_type
+        cards_list.append(make_credit_card(card.card_id, amount_saved, reward_type))
 
 
-# get total amount eligible for rewards by card
+def populate_spending(table):
+    spending_categories_list.clear()
+    for row in session.query(table.columns.category).distinct():
+        category = row.category
+        total = round(float(get_total_spent_by_category_raw(category)), 2)
+        spending_categories_list.append(make_spending_entry(category, total))
+
+
 def get_total_spent_by_card(card_id):
     total = 0
-    try:
-        params = config()
-        conn = psycopg2.connect(**params)
 
-        categories = pd.read_sql(
-            "SELECT category FROM rate_rules WHERE card_id='{}'".format(card_id), conn)
+    for row in session.query(rate_rules.columns.category).filter(rate_rules.columns.card_id == card_id):
+        category = row.category
+        total += get_total_spent_by_category(category, card_id)
+    return total
 
-        for category in categories:
-            total += get_total_spent_by_category(category, card_id)
-        return total
-    except (Exception, psycopg2.DatabaseError) as error:
-        print("ERROR: get_total_spent_by_card: {}".format(error))
+
+def make_category_info(category_name, amount_saved):
+    category_info = {
+        "category": category_name,
+        "amount_saved": amount_saved
+    }
+
+    return category_info
+
+
+def get_categories_saved(card_id):
+    categories_list = {
+        "name": card_id,
+        "category_saved list": []
+    }
+
+    for row in session.query(rate_rules.columns.category).filter(rate_rules.columns.card_id == card_id):
+        category = row.category
+        category_item = make_category_info(category, get_total_saved_by_category(category, card_id))
+        categories_list["category_saved list"].append(category_item)
+
+    return categories_list
 
 
 def get_total_saved_by_card(card_id):
-    total = 0.0
-    try:
-        params = config()
-        conn = psycopg2.connect(**params)
+    total = 0
 
-        categories = pd.read_sql(
-            "SELECT category FROM rate_rules WHERE card_id='{}'".format(card_id), conn).values
+    for row in session.query(rate_rules.columns.category).filter(rate_rules.columns.card_id == card_id):
+        category = row.category
+        total = total + get_total_saved_by_category(category, card_id)
 
-        # print(categories)
-
-        for category in categories:
-            total = total + get_total_saved_by_category(category[0], card_id)
-        return total
-    except (Exception, psycopg2.DatabaseError) as error:
-        print("ERROR: get_total_saved_by_card: {}".format(error))
+    return total
 
 
 def get_total_saved_by_category(category, card_id):
-    try:
-        # print("total cat param: {}".format(category))
-        params = config()
-        conn = psycopg2.connect(**params)
+    amount_spent = get_total_spent_by_category(category, card_id)
+    rate = session.query(rate_rules.columns.rate_amount).filter(rate_rules.columns.card_id == card_id,
+                                                                rate_rules.columns.category == category).scalar()
 
-        if category == 'ALL' and pd.read_sql("SELECT SUM(amount) FROM transactions", conn).values[0][0]:
-            total = pd.read_sql("SELECT SUM(amount) FROM transactions", conn).values[0][0]
-        elif category == 'ALL_NOT_APPLIED' and get_total_spent_not_applied(card_id):
-            total = get_total_spent_not_applied(category)
-
-        elif pd.read_sql("SELECT SUM(amount) FROM transactions WHERE category='{}'".format(category), conn).values[0]:
-            total = \
-                pd.read_sql("SELECT SUM(amount) FROM transactions WHERE category='{}'".format(category), conn).values[
-                    0]
-        else:
-            return 0.0
-
-        rate = \
-            pd.read_sql(
-                "SELECT rate_amount FROM rate_rules WHERE card_id='{}' AND category='{}'".format(card_id, category),
-                conn).values
-
-        return total * rate
-
-    except (Exception, psycopg2.DatabaseError) as error:
-        print("ERROR: get_total_saved_by_category: {}".format(error))
+    return amount_spent * rate
 
 
 # return total amount spent by category from transactions db
 def get_total_spent_by_category(category, card_id):
-    try:
-        # print("total cat param: {}".format(category))
-        params = config()
-        conn = psycopg2.connect(**params)
+    # try:
+    if category == 'ALL':
+        return session.query(func.sum(transactions.columns.amount)).scalar()
+        # return db.execute("SELECT SUM(amount) FROM transactions")
+    elif category == 'ALL_NOT_APPLIED':
+        return get_total_spent_not_applied(card_id)
+    elif session.query(func.sum(transactions.columns.amount)).filter(
+            transactions.columns.category == category).scalar():
+        return session.query(func.sum(transactions.columns.amount)).filter(
+            transactions.columns.category == category).scalar()
+    else:
+        return 0
 
-        if category == 'ALL' and pd.read_sql("SELECT SUM(amount) FROM transactions", conn).values[0][0]:
-            return pd.read_sql("SELECT SUM(amount) FROM transactions", conn).values[0][0]
-        elif category == 'ALL_NOT_APPLIED' and get_total_spent_not_applied(card_id):
-            return get_total_spent_not_applied(card_id)
-        elif pd.read_sql("SELECT SUM(amount) FROM transactions WHERE category='{}'".format(category), conn).values[0]:
-            return \
-                pd.read_sql("SELECT SUM(amount) FROM transactions WHERE category='{}'".format(category), conn).values[
-                    0]
-        else:
-            return 0.0
 
-    except (Exception, psycopg2.DatabaseError) as error:
-        print("ERROR: get_total_spent_by_category: {}".format(error))
+# return total amount spent by category from transactions db
+def get_total_spent_by_category_raw(category):
+    # try:
+    if session.query(func.sum(transactions.columns.amount)).filter(
+            transactions.columns.category == category).scalar():
+        return session.query(func.sum(transactions.columns.amount)).filter(
+            transactions.columns.category == category).scalar()
+    else:
+        return 0
 
 
 # get list of all categories (expect all not applied). Get total of each category and subtract from the total amount of
 # transactions to get the total amount of money spent on non-applicable categories
 def get_total_spent_not_applied(card_id):
+    grand_total = get_total_spent_by_category('ALL', card_id)
+
+    for row in session.query(rate_rules.columns.category).filter(rate_rules.columns.card_id == card_id,
+                                                                 rate_rules.columns.category != 'ALL_NOT_APPLIED'):
+        category = row.category
+        category_total = get_total_spent_by_category(category, card_id)
+        grand_total = grand_total - category_total
+
+    return grand_total
+
+
+def upload_data_from_file(file):
+    params = config()
+    conn = psycopg2.connect(**params)
+
+    # expected cols: date, merchant_id, amount, category
+
     try:
-        params = config()
-        conn = psycopg2.connect(**params)
-
-        categories = pd.read_sql("SELECT category FROM rate_rules WHERE card_id='{}' AND NOT "
-                                 "category=\'ALL_NOT_APPLIED\' AND NOT category=\'ALL\'".format(card_id), conn)
-
-        grand_total = get_total_spent_by_category('ALL', card_id)
-
-        for index, row in enumerate(categories.values):
-            # print(index,row)
-            category_total = get_total_spent_by_category("{}".format(row[0]), card_id)
-            grand_total = (grand_total - category_total)
-
-        return grand_total
+        sql = "COPY transactions.user FROM STDIN DELIMITER \',\' CSV HEADER"
+        f = open(file, 'r')
+        cur = conn.cursor()
+        cur.copy_from(f, "transactions.\"user\"", sep=',')
+        conn.commit()
+        f.close()
     except (Exception, psycopg2.DatabaseError) as error:
-        print("ERROR: get_total_spent_not_applied: {}".format(error))
+        print(error)
+
+    return None
+
+
+def deleteTable():
+    params = config()
+    conn = psycopg2.connect(**params)
+
+    # expected cols: date, merchant_id, amount, category
+
+    try:
+        sql = "TRUNCATE {}; DELETE FROM {}".format("transactions.\"user\"", "transactions.\"user\"")
+        cur = conn.cursor()
+        cur.execute(sql)
+        conn.commit()
+    except (Exception, psycopg2.DatabaseError) as error:
+        print(error)
+
+    return None
 
 
 if __name__ == '__main__':
-    # print("total by card: {}".format(get_total_spent_by_card("\'SAVOR\'")))
-    # print("total by category: {}".format(get_total_spent_by_category("\'DINING\'", "\'FREEDOM\'")))
-    # print("total not applied: {}".format(get_total_spent_not_applied("\'SAVOR\'")))
-    # print("total saved by category: {}".format(get_total_saved_by_category("\'DINING\'", "\'SAVOR\'")))
-    # print("total saved by card: {}".format(get_total_saved_by_card("\'SAVOR_ONE\'")))
-    # print("total saved by card: {}".format(get_total_saved_by_card("\'FREEDOM\'")))
     populate_dict()
+    populate_spending(transactions)
+    # print(get_categories_saved('SAVOR'))
 
 app = Flask(__name__)
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+CORS(app)
+Swagger(app)
 print(__name__)
 
 
-# GET /books
-# @app.route('/books', methods='POST')
+@app.route('/card', methods=['POST'])
+def add_new_card():
+    return jsonify(request.get_json())
+
+
+@app.route('/spending')
+def get_books():
+    return jsonify({'spending': spending_categories_list})
+
+
+@app.route('/spending/<string:table>')
+def get_books(table):
+    if table == 'user':
+        populate_spending(user)
+    else:
+        populate_spending(transactions)
+
+    return jsonify({'spending': spending_categories_list})
+
 
 @app.route('/cards')
-def get_books():
+def get_cards():
     return jsonify({'cards': cards_list})
 
 
@@ -251,12 +297,49 @@ def get_book_by_isbn(card_id):
             return_value = {
                 'card_name': card["name"],
                 'amount_saved': card["amount_saved"],
-                'reward_type': card["reward_type"]
+                'reward_type': card["reward_type"],
+                'categories': get_categories_saved(card_id)
             }
     return jsonify(return_value)
 
 
+@app.route('/optimized/<string:reward_type>')
+def get_optimized_for_type(reward_type):
+    result = 0.0
+    result_amount = 0.0
+    for card in cards_list:
+        if card["reward_type"] == reward_type:
+            if card["amount_saved"] > result_amount:
+                print("{}".format(card))
+                print("{} {} {}".format(card["reward_type"], card["amount_saved"], card["name"]))
+                result_amount = card["amount_saved"]
+                result = card
+    return jsonify(result)
+
+
+@app.route('/delete')
+def ghj():
+    deleteTable()
+    return "huzzah"
+
+
+@app.route('/transactions', methods=['POST'])
+def post_transactions():
+    transactions_data = request.files['file']
+    if transactions_data:
+        filename = secure_filename(transactions_data.filename)
+        path = os.getcwd()
+        with open("transactions.csv", "w+") as file:
+            file.write(transactions_data.read().decode("utf-8"))
+
+        upload_data_from_file(path + "/transactions.csv")
+    return "Uploaded to DB!"
+
+
 # POST new credit card
 # POST new credit card rule
+# GET total spent on category
+# GET total saved by card : would list categories
+
 
 app.run(port=5000)
