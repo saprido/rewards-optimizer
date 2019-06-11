@@ -29,7 +29,7 @@ session = Session()
 credit_cards = Table('credit_cards', meta, autoload=True, autoload_with=db)
 rate_rules = Table('rate_rules', meta, autoload=True, autoload_with=db)
 transactions = Table('transactions', meta, autoload=True, autoload_with=db)
-user = Table('transactions.user', meta, autoload=True, autoload_with=db)
+# user = Table('transactions.user', meta, autoload=True, autoload_with=db)
 
 
 def connect():
@@ -223,7 +223,7 @@ def upload_data_from_file(file):
     # expected cols: date, merchant_id, amount, category
 
     try:
-        sql = "COPY transactions.user FROM STDIN DELIMITER \',\' CSV HEADER"
+        sql = "COPY transaction FROM STDIN DELIMITER \',\' CSV HEADER"
         f = open(file, 'r')
         cur = conn.cursor()
         cur.copy_from(f, "transactions.\"user\"", sep=',')
@@ -274,14 +274,12 @@ def get_books():
     return jsonify({'spending': spending_categories_list})
 
 
-@app.route('/spending/<string:table>')
-def get_books(table):
-    if table == 'user':
-        populate_spending(user)
-    else:
-        populate_spending(transactions)
-
-    return jsonify({'spending': spending_categories_list})
+# @app.route('/spending/<string:table>')
+# def get_books(table):
+#
+#     populate_spending(transactions)
+#
+#     return jsonify({'spending': spending_categories_list})
 
 
 @app.route('/cards')
@@ -342,4 +340,4 @@ def post_transactions():
 # GET total saved by card : would list categories
 
 
-app.run(port=5000)
+app.run(host='0.0.0.0',port=80)

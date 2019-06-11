@@ -7,3 +7,6 @@
 .idea/workspace.xml
 __pycache__/config.cpython-37.pyc
 venv/
+database.ini
+flyway/conf/flyway.conf
+flyway/conf/flyway.conf
